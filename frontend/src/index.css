@@ -1,0 +1,130 @@
+/* ============================================
+   Global Reset & Design Tokens
+   ============================================ */
+
+:root {
+  /* --- Warm neutral palette --- */
+  --color-bg: #faf8f5;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f3f0eb;
+  --color-ink: #1a1714;
+  --color-ink-secondary: #6e6359;
+  --color-ink-muted: #9e9488;
+  --color-accent: #a0522d;
+  --color-accent-hover: #8b4526;
+  --color-accent-soft: #f5ebe4;
+  --color-accent-glow: rgba(160, 82, 45, 0.08);
+  --color-border: #e8e2d9;
+  --color-border-focus: #c4b8a8;
+  --color-error: #c0392b;
+  --color-error-soft: #fdecea;
+  --color-success: #5d7a56;
+
+  /* --- Sentiment colors --- */
+  --sentiment-neutral: #6e6359;
+  --sentiment-frustrated: #b8893a;
+  --sentiment-angry: #9c4a3c;
+
+  /* --- Typography --- */
+  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Playfair Display', Georgia, serif;
+
+  /* --- Spacing --- */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* --- Radii --- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-full: 9999px;
+
+  /* --- Shadows --- */
+  --shadow-sm: 0 1px 2px rgba(26, 23, 20, 0.04);
+  --shadow-md: 0 4px 12px rgba(26, 23, 20, 0.06);
+  --shadow-lg: 0 8px 24px rgba(26, 23, 20, 0.08);
+  --shadow-input: 0 2px 8px rgba(26, 23, 20, 0.04);
+
+  /* --- Transitions --- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-muted);
+}
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+input {
+  font-family: var(--font-body);
+  border: none;
+  outline: none;
+}

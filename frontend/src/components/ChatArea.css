@@ -1,0 +1,39 @@
+/* ============================================
+   Chat Area Component
+   ============================================ */
+
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-area__inner {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 12px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-area__messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-area__anchor {
+  height: 1px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  .chat-area__inner {
+    padding: 8px 16px 20px;
+  }
+}

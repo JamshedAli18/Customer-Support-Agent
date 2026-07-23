@@ -1,0 +1,155 @@
+/* ============================================
+   Chat Message Component
+   ============================================ */
+
+.message {
+  display: flex;
+  gap: 10px;
+  animation: messageIn 0.35s var(--ease-out) both;
+}
+
+.message--user {
+  justify-content: flex-end;
+}
+
+.message--assistant {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.message--system {
+  justify-content: center;
+}
+
+/* --- Avatar --- */
+.message__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--color-accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* --- Bubble --- */
+.message__bubble {
+  max-width: 75%;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  font-size: 14.5px;
+  line-height: 1.6;
+  position: relative;
+}
+
+.message__bubble--user {
+  background: var(--color-accent);
+  color: #fff;
+  border-bottom-right-radius: 6px;
+  box-shadow: 0 2px 8px rgba(160, 82, 45, 0.15);
+}
+
+.message__bubble--assistant {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: 1px solid var(--color-border);
+  border-bottom-left-radius: 6px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* --- Intent Tag --- */
+.message__tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  margin-bottom: 8px;
+}
+
+.message__text {
+  margin: 0;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+/* --- Streaming Cursor --- */
+.message__cursor {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  background: var(--color-accent);
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  animation: blink 0.85s steps(2) infinite;
+}
+
+@keyframes blink {
+  0% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+/* --- Replay Button --- */
+.message__replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  cursor: pointer;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.message__replay:hover {
+  opacity: 0.7;
+}
+
+/* --- System Note --- */
+.message__system-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.message__system-text {
+  font-size: 13px;
+  color: var(--color-ink-secondary);
+  background: var(--color-accent-soft);
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  line-height: 1.55;
+  max-width: 88%;
+}
+
+/* --- Message entrance animation --- */
+@keyframes messageIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
