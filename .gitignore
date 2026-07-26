@@ -22,3 +22,6 @@ frontend/build/
 *.wav
 backend/tickets/
 backend/warranty_claims/
+
+credentials.json
+token.json

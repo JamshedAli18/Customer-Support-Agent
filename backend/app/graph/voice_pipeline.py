@@ -69,7 +69,7 @@ def _synthesize_with_deepgram(text: str, output_path: str) -> str:
             "Content-Type": "application/json",
         },
         json={"text": text},
-        timeout=8,
+        timeout=(3, 6),
     )
     response.raise_for_status()
     with open(output_path, "wb") as f:

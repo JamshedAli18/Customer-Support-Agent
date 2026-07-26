@@ -88,10 +88,7 @@ def route_after_classify(state: dict) -> Literal[
     if intent == "order_cancel":
         return "order_cancel"
     if intent == "complaint":
-        warranty_claim = state.get("warranty_claim") or {}
-        terminal_statuses = {"filed", "abandoned", "declined_out_of_warranty"}
-        already_filed = warranty_claim.get("status") in terminal_statuses
-        if state.get("warranty_eligible") and not already_filed:
+        if state.get("warranty_eligible"):
             return "warranty_claim"
         return "empathetic"
     return "other"
@@ -133,7 +130,7 @@ def route_at_start(state: dict) -> Literal[
         return "warranty_claim"
 
     order_booking = state.get("order_booking") or {}
-    if order_booking.get("status") == "collecting":
+    if order_booking.get("status") in ("collecting", "confirming"):
         return "order_booking"
 
     return "classify"

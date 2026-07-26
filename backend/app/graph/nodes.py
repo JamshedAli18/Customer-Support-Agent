@@ -17,7 +17,7 @@ from retriever import VoiceCartRetriever
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from db import inventory_collection, tickets_collection, warranty_claims_collection, orders_collection
-from email_service import send_support_email
+from email_service import send_support_email, send_customer_email
 from slack_service import notify_support_ticket, notify_warranty_claim, notify_new_order, notify_order_cancelled
 
 load_dotenv()
@@ -31,6 +31,8 @@ retriever = VoiceCartRetriever(alpha=0.75)
 
 SCORE_THRESHOLD = 0.25
 PRODUCT_NAME = "ShopNest Pulse"
+VALID_NAMESPACES = {"product-info", "usage-guidance", "troubleshooting", "policies", "limitations"}
+
 
 EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
@@ -67,15 +69,21 @@ def _interpret_yes_no(message: str) -> Optional[bool]:
     response = client.chat.completions.create(
         messages=[{
             "role": "user",
-            "content": f'Does this message mean "yes" or "no" in response to a yes/no question? Message: "{message}". Respond with exactly one word: yes, no, or unclear.',
+            "content": (
+                f'A user was asked a yes/no question. Their reply was: "{message}". '
+                f'Does this reply clearly mean "yes" or clearly mean "no"? '
+                f'If the reply is a completely different question, an unrelated topic, or doesn\'t '
+                f'actually answer yes or no at all, respond "unclear" — do NOT guess "no" just because '
+                f'it isn\'t a "yes". Respond with exactly one word: yes, no, or unclear.'
+            ),
         }],
         model="llama-3.1-8b-instant",
         temperature=0,
     )
     answer = response.choices[0].message.content.strip().lower()
-    if "yes" in answer:
+    if re.search(r"\byes\b", answer):
         return True
-    if "no" in answer:
+    if re.search(r"\bno\b", answer):
         return False
     return None
 
@@ -103,7 +111,7 @@ INTENT options:
 - "order_booking": user wants to buy/order/purchase the earbuds (e.g. "I want to buy this", "I'd like to order the black one", "can I purchase these")
 - "order_tracking": user is asking about the status of an existing order (e.g. "where's my order", "track my order", "what's the status of order ORD-...")
 - "order_cancel": user wants to cancel an existing order (e.g. "cancel my order", "cancel order ORD-...", "I want to cancel this order")
-- "other": anything that doesn't fit the above (greetings, casual chat, stating their name, thanks, unclear requests, off-topic, or a short acknowledgment like "ok"/"no"/"good" that doesn't need a namespace or color lookup). This INCLUDES clearly off-topic requests unrelated to ShopNest Pulse earbuds at all (e.g. "recommend a podcast", "what's the weather") — do NOT classify these as "inquiry", since there is no product knowledge to retrieve for them.
+- "other": anything that doesn't fit the above (greetings, casual chat, stating their name, thanks, unclear requests, off-topic, or a short acknowledgment like "ok"/"no"/"good" that doesn't need a namespace or color lookup). This INCLUDES clearly off-topic requests unrelated to ShopNest Pulse earbuds at all (e.g. "recommend a podcast", "what's the weather") — do NOT classify these as "inquiry", since there is no product knowledge to retrieve for them. This ALSO INCLUDES the user asking about THEIR OWN information, status, or conversation history already established earlier in this session — e.g. "what's my name", "what did I tell you earlier", "have you sent my issue to your team", "did you escalate this", "did you email them", "what's my order status" (when no order ID is given, this is order_tracking instead — but a vague status check about escalation/email specifically is "other"). None of these are product-knowledge inquiries needing retrieval — they must use intent "other" with target_namespace null, never "inquiry".
 
 SENTIMENT options:
 - "neutral": calm, straightforward tone
@@ -223,9 +231,13 @@ def classify_node(state: dict) -> dict:
         state["same_issue_streak"] = 0
         if issue_topic:
             state["last_issue_topic"] = issue_topic
+    elif intent == "other":
+        # Short acknowledgments/small talk don't mean the user abandoned
+        # the issue — leave the streak untouched rather than resetting it.
+        pass
     else:
-        # Non-complaint turn breaks any in-progress issue streak context,
-        # since the user has moved on to something else entirely.
+        # A genuinely different substantive intent (inquiry, order, stock
+        # check, etc.) means the user has moved on — reset the streak.
         state["same_issue_streak"] = 0
 
     print(f"[classify_node] intent={intent} sentiment={sentiment} namespace={target_namespace} secondary_namespace={secondary_namespace} color={color} quantity={quantity} order_id_mentioned={order_id_mentioned} warranty_eligible={warranty_eligible} issue_topic={issue_topic} same_issue_as_before={same_issue_as_before} same_issue_streak={state.get('same_issue_streak', 0)} user_name={state.get('user_name')} reason={reason}")
@@ -265,6 +277,9 @@ NO_ANSWER_RESPONSE = (
 
 def _retrieve_context(user_question: str, namespace: str) -> tuple[Optional[str], float]:
     """Shared retrieval helper: returns (context_string_or_None, top_score)."""
+    if namespace not in VALID_NAMESPACES:
+        print(f"[_retrieve_context] Invalid namespace '{namespace}' from classifier, treating as no context")
+        return None, 0.0
     results = retriever.retrieve(user_question, namespace, top_k=5)
     if not results or results[0]["score"] < SCORE_THRESHOLD:
         return None, (results[0]["score"] if results else 0.0)
@@ -479,11 +494,11 @@ def escalate_handoff_node(state: dict) -> dict:
     }
 
     state["_pending_ticket"] = pending_ticket
-    state["escalation_email"] = {"status": "asking_consent", "ticket_id": ticket_id, "email": None}
+    state["escalation_email"] = {"status": "collecting_email", "ticket_id": ticket_id, "email": None}
     state["is_handoff_turn"] = True
     state["response"] = (
         "I'd like to get this over to our support team so they can take a closer look. "
-        "Would you also like me to send your details to them by email?"
+        "To make sure they can follow up, could you share your email address?"
     )
 
     print(f"[escalate_handoff_node] Prepared ticket {ticket_id}, awaiting email consent")
@@ -536,47 +551,36 @@ def _finalize_ticket(state: dict, customer_email: Optional[str]) -> None:
 
 @traceable(name="escalation_followup_node")
 def escalation_followup_node(state: dict) -> dict:
-    """Handles the consent yes/no answer, then email collection, for escalation."""
+    """
+    Collects the customer's email for an escalated ticket. Email is
+    OPTIONAL here (unlike warranty claims) — if the user provides one,
+    we finalize with it. If the user explicitly declines, we back out
+    of escalation gracefully and immediately, rather than insisting.
+    """
     escalation_email = state.get("escalation_email") or {}
-    status = escalation_email.get("status")
     user_message = state["messages"][-1]["content"]
 
-    if status == "asking_consent":
-        implicit_email = _extract_email(user_message)
-        if implicit_email:
-            escalation_email["email"] = implicit_email
-            escalation_email["status"] = "sent"
-            state["escalation_email"] = escalation_email
-            _finalize_ticket(state, customer_email=implicit_email)
-            return state
+    email_found = _extract_email(user_message)
 
-        wants_email = _interpret_yes_no(user_message)
-        if wants_email is True:
-            escalation_email["status"] = "collecting_email"
-            state["escalation_email"] = escalation_email
-            state["response"] = "Great — could you share your email address so our support team can reach you?"
-        elif wants_email is False:
-            escalation_email["status"] = "declined"
-            state["escalation_email"] = escalation_email
-            _finalize_ticket(state, customer_email=None)
-        else:
-            state["response"] = "Just to confirm — would you like me to email our support team with your details?"
+    if email_found:
+        escalation_email["email"] = email_found
+        escalation_email["status"] = "sent"
+        state["escalation_email"] = escalation_email
+        _finalize_ticket(state, customer_email=email_found)
         return state
 
-    if status == "collecting_email":
-        email_found = _extract_email(user_message)
-        if email_found:
-            escalation_email["email"] = email_found
-            escalation_email["status"] = "sent"
-            state["escalation_email"] = escalation_email
-            _finalize_ticket(state, customer_email=email_found)
-        else:
-            state["response"] = "I couldn't quite catch a valid email address — could you type it again?"
+    declined = _interpret_yes_no(user_message)
+    if declined is False:
+        escalation_email["status"] = "declined"
+        state["escalation_email"] = escalation_email
+        _finalize_ticket(state, customer_email=None)
+        state["response"] = (
+            "No worries — I've sent your issue over to our support team without an email on file. "
+            f"You can expect to hear back {SUPPORT_RESPONSE_TIME}."
+        )
         return state
 
-    state["response"] = HANDOFF_MESSAGE
-    state["escalated"] = True
-    state["is_handoff_turn"] = True
+    state["response"] = "I couldn't catch a valid email address — could you type it again, or let me know if you'd rather skip it?"
     return state
 
 
@@ -604,6 +608,8 @@ The user's latest message does not require a product lookup, complaint handling,
 
 {name_context}
 
+{escalation_status}
+
 Recent conversation history:
 {history}
 
@@ -611,6 +617,7 @@ Instructions:
 - If the user is greeting you or making small talk, respond warmly and briefly, and naturally invite them to ask about ShopNest Pulse earbuds (setup, specs, policies, or issues) — but don't repeat this invitation if you've already said it earlier in the history.
 - If the user just told you their name, acknowledge it naturally and use it if it fits.
 - If the user's message is genuinely OUT OF SCOPE — explicitly say you don't have information outside of ShopNest Pulse support. Do NOT attempt to answer the out-of-scope question.
+- CRITICAL: NEVER claim that an issue has been escalated, that an email has been sent, or that a support ticket has been created unless the ESCALATION STATUS above explicitly confirms this already happened. If the user asks whether something was escalated/emailed and it has NOT, say honestly that it hasn't happened yet — do not invent or assume this occurred just because the conversation history sounds frustrated.
 
 USER'S LATEST MESSAGE:
 {message}
@@ -631,7 +638,12 @@ def other_node(state: dict) -> dict:
         else "You don't know the user's name yet."
     )
 
-    prompt = OTHER_NODE_SYSTEM_PROMPT.format(name_context=name_context, history=history_text, message=user_message)
+    if state.get("escalated"):
+        escalation_status = f"ESCALATION STATUS: A support ticket (ID: {state.get('ticket_id')}) HAS already been created and sent to the support team."
+    else:
+        escalation_status = "ESCALATION STATUS: No support ticket has been created and nothing has been escalated or emailed in this conversation yet."
+
+    prompt = OTHER_NODE_SYSTEM_PROMPT.format(name_context=name_context, escalation_status=escalation_status, history=history_text, message=user_message)
 
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
@@ -743,13 +755,13 @@ Extract any of the following present in the message below. Use null for anything
 - color: one of the product colors mentioned, or null
 - quantity: a whole number of units, or null
 - shipping_address: a REAL, concrete shipping address (street, city, etc.) if one is actually given. If the user instead refers to a previous address vaguely (e.g. "same address", "same as before", "same as last time", "ship it there again"), set shipping_address to null and instead set uses_previous_address to true.
-- email: an email address if mentioned, or null
+- email: an email address if mentioned. If the user instead refers to a previous email vaguely (e.g. "same email", "same as above", "use the one I gave before"), set email to null and instead set uses_previous_email to true.
 
 CUSTOMER MESSAGE:
 {message}
 
 Respond ONLY with valid JSON in this exact format:
-{{"color": "..." or null, "quantity": 0 or null, "shipping_address": "..." or null, "uses_previous_address": true or false, "email": "..." or null}}
+{{"color": "..." or null, "quantity": 0 or null, "shipping_address": "..." or null, "uses_previous_address": true or false, "email": "..." or null, "uses_previous_email": true or false}}
 """
 
 
@@ -765,6 +777,28 @@ def _describe_order_field(field: str) -> str:
         "email": "your email address",
     }
     return descriptions.get(field, field)
+
+
+def _build_order_confirmation_email_html(order: dict) -> str:
+    return f"""
+    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; color: #2b2622;">
+      <h2 style="color: #a0522d;">Order Confirmed — ShopNest Pulse</h2>
+      <p>Hi{f" {order['customer_name']}" if order.get('customer_name') else ''},</p>
+      <p>Thanks for your order! Here are your order details:</p>
+
+      <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+        <tr><td style="padding: 6px 0; color: #6e6359;">Order ID</td><td style="padding: 6px 0; font-weight: bold;">{order['order_id']}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6e6359;">Product</td><td style="padding: 6px 0;">{order['product']} — {order['color']}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6e6359;">Quantity</td><td style="padding: 6px 0;">{order['quantity']}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6e6359;">Total</td><td style="padding: 6px 0; font-weight: bold;">${order['total_price']:.2f}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6e6359;">Payment</td><td style="padding: 6px 0;">Cash on Delivery (COD)</td></tr>
+        <tr><td style="padding: 6px 0; color: #6e6359;">Shipping Address</td><td style="padding: 6px 0;">{order['shipping_address']}</td></tr>
+      </table>
+
+      <p style="color: #6e6359; font-size: 13px;">Payment will be collected upon delivery.</p>
+      <p style="margin-top: 24px;">Thanks for shopping with ShopNest!</p>
+    </div>
+    """
 
 
 def place_order(color: str, quantity: int, shipping_address: str, customer_email: str, customer_name: str | None) -> dict:
@@ -854,6 +888,54 @@ def order_booking_node(state: dict) -> dict:
             state["response"] = f"Just to confirm — should I ship to {order_state.get('candidate_address')}?"
             return state
 
+    # --- Handle final order confirmation BEFORE anything else ---
+    if order_state.get("status") == "confirming":
+        confirmed = _interpret_yes_no(user_message)
+
+        if confirmed is True:
+            customer_name = state.get("user_name")
+            order = place_order(
+                order_state["color"], int(order_state["quantity"]), order_state["shipping_address"],
+                order_state["email"], customer_name,
+            )
+
+            order_state["status"] = "booked"
+            order_state["order_id"] = order["order_id"]
+            state["order_booking"] = order_state
+            state["last_shipping_address"] = order_state["shipping_address"]
+            state["last_email"] = order_state["email"]
+
+            notify_new_order(order["order_id"], order["color"], order["quantity"], order["total_price"], order["customer_email"])
+
+            confirmation_html = _build_order_confirmation_email_html(order)
+            email_sent = send_customer_email(
+                to_email=order["customer_email"],
+                subject=f"Order Confirmed — {order['order_id']}",
+                html_body=confirmation_html,
+            )
+            print(f"[order_booking_node] Confirmation email sent: {email_sent}")
+
+            state["response"] = (
+                f"Your order is booked — reference {order['order_id']}, {order['quantity']}x {order['color']} "
+                f"for a total of ${order['total_price']:.2f}. Payment will be Cash on Delivery (COD) when your "
+                f"order arrives. It'll ship to {order['shipping_address']}, and a confirmation email has "
+                f"been sent to {order['customer_email']}."
+            )
+            print(f"[order_booking_node] Order booked: {order['order_id']}")
+            return state
+
+        elif confirmed is False:
+            order_state["status"] = "abandoned"
+            state["order_booking"] = order_state
+            state["response"] = "No problem — your order has not been booked. Let me know if you'd like to order something else."
+            print("[order_booking_node] User declined final confirmation, order not booked")
+            return state
+
+        else:
+            state["order_booking"] = order_state
+            state["response"] = "Just to confirm — should I go ahead and place this order?"
+            return state
+
     extraction_response = client.chat.completions.create(
         messages=[{"role": "user", "content": ORDER_EXTRACTION_PROMPT.format(message=user_message)}],
         model="llama-3.3-70b-versatile",
@@ -862,14 +944,22 @@ def order_booking_node(state: dict) -> dict:
     )
     extracted = json.loads(extraction_response.choices[0].message.content)
 
-    # Track the MOST RECENT real address mentioned in this session, updated
-    # every time one is given — regardless of whether that order succeeds.
+    # Track the MOST RECENT real address/email mentioned in this session,
+    # updated every time one is given — regardless of whether that order succeeds.
     if extracted.get("shipping_address"):
         state["last_shipping_address"] = extracted["shipping_address"]
+    if extracted.get("email"):
+        state["last_email"] = extracted["email"]
 
     for field in REQUIRED_ORDER_FIELDS:
         if extracted.get(field) and not order_state.get(field):
             order_state[field] = extracted[field]
+
+    if not order_state.get("email") and extracted.get("uses_previous_email"):
+        last_email = state.get("last_email")
+        if last_email:
+            order_state["email"] = last_email
+            print(f"[order_booking_node] Resolved 'same email' to remembered value: {last_email}")
 
     if not order_state.get("shipping_address") and extracted.get("uses_previous_address"):
         last_address = state.get("last_shipping_address")
@@ -936,26 +1026,22 @@ def order_booking_node(state: dict) -> dict:
         )
         return state
 
-    customer_name = state.get("user_name")
-    order = place_order(
-        order_state["color"], requested_qty, order_state["shipping_address"],
-        order_state["email"], customer_name,
-    )
+    # All fields present and stock confirmed — show a summary and ask for
+    # final confirmation before actually committing the order (writing to
+    # MongoDB, decrementing inventory, sending email, notifying Slack).
+    unit_price = stock_doc.get("price", 0)
+    total_price = round(unit_price * requested_qty, 2)
 
-    order_state["status"] = "booked"
-    order_state["order_id"] = order["order_id"]
+    order_state["status"] = "confirming"
+    order_state["pending_total"] = total_price
     state["order_booking"] = order_state
-    state["last_shipping_address"] = order_state["shipping_address"]
-
-    notify_new_order(order["order_id"], order["color"], order["quantity"], order["total_price"], order["customer_email"])
 
     state["response"] = (
-        f"Your order is booked — reference {order['order_id']}, {requested_qty}x {order_state['color']} "
-        f"for a total of ${order['total_price']:.2f}. Payment will be Cash on Delivery (COD) when your "
-        f"order arrives. It'll ship to {order_state['shipping_address']}, and a confirmation will go to "
-        f"{order_state['email']}."
+        f"Just to confirm — {requested_qty}x {order_state['color']} for a total of ${total_price:.2f}, "
+        f"paid via Cash on Delivery, shipping to {order_state['shipping_address']}, with confirmation "
+        f"sent to {order_state['email']}. Should I go ahead and place this order?"
     )
-    print(f"[order_booking_node] Order booked: {order['order_id']}")
+    print(f"[order_booking_node] Awaiting final confirmation before booking")
     return state
 
 

@@ -25,7 +25,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+sys.path.append(os.path.join(os.path.dirname(__file__), "app"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "app", "graph"))
+from db import sessions_collection
 from voice_pipeline import run_voice_turn, synthesize_speech
 from graph import graph
 from nodes import (
@@ -54,6 +56,30 @@ app.add_middleware(
 )
 
 SESSIONS: dict[str, dict] = {}
+
+
+def _load_session_from_db(session_id: str) -> Optional[dict]:
+    """Falls back to MongoDB if a session isn't in memory (e.g. after a server restart)."""
+    doc = sessions_collection.find_one({"session_id": session_id})
+    if doc:
+        doc.pop("_id", None)
+        doc.pop("session_id", None)
+        return doc
+    return None
+
+
+def _save_session_to_db(session_id: str, state: dict) -> None:
+    """Persists the current session state so it survives a server restart."""
+    try:
+        doc = dict(state)
+        doc["session_id"] = session_id
+        sessions_collection.update_one(
+            {"session_id": session_id},
+            {"$set": doc},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"[_save_session_to_db] Failed to persist session: {e}")
 
 
 class VoiceResponse(BaseModel):
@@ -89,7 +115,8 @@ async def voice_endpoint(
         session_id = str(uuid.uuid4())
 
     if session_id not in SESSIONS:
-        SESSIONS[session_id] = {
+        restored = _load_session_from_db(session_id)
+        SESSIONS[session_id] = restored or {
             "messages": [],
             "sentiment_history": [],
             "turn_count": 0,
@@ -134,6 +161,7 @@ async def voice_endpoint(
         state["transcript"] = text
 
     SESSIONS[session_id] = state
+    _save_session_to_db(session_id, state)
 
     with open(output_path, "rb") as f:
         audio_bytes = f.read()
@@ -180,7 +208,7 @@ def _check_pending_short_circuit(state: dict) -> Optional[str]:
         return "warranty_claim"
 
     order_booking = state.get("order_booking") or {}
-    if order_booking.get("status") == "collecting":
+    if order_booking.get("status") in ("collecting", "confirming"):
         return "order_booking"
 
     return None
@@ -197,7 +225,8 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
     if not session_id:
         session_id = str(uuid.uuid4())
     if session_id not in SESSIONS:
-        SESSIONS[session_id] = {"messages": [], "sentiment_history": [], "turn_count": 0}
+        restored = _load_session_from_db(session_id)
+        SESSIONS[session_id] = restored or {"messages": [], "sentiment_history": [], "turn_count": 0}
 
     state = SESSIONS[session_id]
     pending_route = _check_pending_short_circuit(state)
@@ -218,6 +247,7 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
 
             state["messages"].append({"role": "assistant", "content": full_response})
             SESSIONS[session_id] = state
+            _save_session_to_db(session_id, state)
 
             audio_base64 = _synthesize_and_encode(full_response)
             yield f"event: done\ndata: {json.dumps({'escalated': state.get('escalated', False), 'is_handoff_turn': False, 'ticket_id': state.get('ticket_id'), 'audio_base64': audio_base64})}\n\n"
@@ -240,6 +270,7 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
 
             state["messages"].append({"role": "assistant", "content": full_response})
             SESSIONS[session_id] = state
+            _save_session_to_db(session_id, state)
 
             audio_base64 = _synthesize_and_encode(full_response)
             yield f"event: done\ndata: {json.dumps({'escalated': state.get('escalated', False), 'is_handoff_turn': state.get('is_handoff_turn', False), 'ticket_id': state.get('ticket_id'), 'audio_base64': audio_base64})}\n\n"
@@ -257,12 +288,9 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
             and same_issue_streak >= 3
         )
 
-        warranty_claim = state_after_classify.get("warranty_claim") or {}
-        already_filed = warranty_claim.get("status") == "filed"
         should_start_warranty_claim = (
             intent == "complaint"
             and state_after_classify.get("warranty_eligible")
-            and not already_filed
         )
 
         full_response = ""
@@ -327,6 +355,7 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
 
         state_after_classify["messages"].append({"role": "assistant", "content": full_response})
         SESSIONS[session_id] = state_after_classify
+        _save_session_to_db(session_id, state_after_classify)
 
         audio_base64 = _synthesize_and_encode(full_response)
 
@@ -353,5 +382,5 @@ def _synthesize_and_encode(text: str) -> str:
 def reset_session(session_id: str):
     if session_id in SESSIONS:
         del SESSIONS[session_id]
-        return {"status": "session reset"}
-    return {"status": "session not found"}
+    sessions_collection.delete_one({"session_id": session_id})
+    return {"status": "session reset"}
