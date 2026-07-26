@@ -158,8 +158,12 @@ USER_NAME (extract whenever the user states or mentions their own name, e.g. "my
 
 Note: if intent is "complaint", target_namespace should be "troubleshooting" if the complaint sounds like a fixable technical issue, or "limitations" if it relates to a known product limitation (including normal wear like battery aging after extended use — this is a limitations topic, NOT a fixable issue), or null only if neither applies (e.g. a refund demand with no technical detail). A non-warranty-eligible complaint should almost always map to "limitations" since it's describing expected product behavior, not a fixable defect.
 
+EXPLICIT_ESCALATION_REQUEST (relevant for any message, otherwise use false):
+- true if the user explicitly asks to escalate, talk to a human, speak to a real person, get this sent to support, or similar direct requests — e.g. "escalate this", "escalate the issue", "I want to talk to a human", "get me support", "send this to your team". This can happen regardless of intent or sentiment, and OVERRIDES all other routing — even mid-troubleshooting or on the very first message about an issue.
+- false otherwise, including ordinary complaints that don't explicitly ask for escalation/a human.
+
 Respond ONLY with valid JSON in this exact format, no other text:
-{{"intent": "...", "sentiment": "...", "target_namespace": "..." or null, "secondary_namespace": "..." or null, "color": "..." or null, "quantity": 0 or null, "order_id": "..." or null, "warranty_eligible": true or false, "issue_topic": "..." or null, "same_issue_as_before": true or false, "user_name": "..." or null, "reason": "brief one-sentence explanation"}}
+{{"intent": "...", "sentiment": "...", "target_namespace": "..." or null, "secondary_namespace": "..." or null, "color": "..." or null, "quantity": 0 or null, "order_id": "..." or null, "warranty_eligible": true or false, "issue_topic": "..." or null, "same_issue_as_before": true or false, "explicit_escalation_request": true or false, "user_name": "..." or null, "reason": "brief one-sentence explanation"}}
 """
 
 
@@ -197,6 +201,7 @@ def classify_node(state: dict) -> dict:
     warranty_eligible = parsed.get("warranty_eligible", False)
     issue_topic = parsed.get("issue_topic")
     same_issue_as_before = parsed.get("same_issue_as_before", False)
+    explicit_escalation_request = parsed.get("explicit_escalation_request", False)
     extracted_name = parsed.get("user_name")
     reason = parsed.get("reason", "")
 
@@ -208,6 +213,7 @@ def classify_node(state: dict) -> dict:
     state["quantity"] = quantity
     state["order_id_mentioned"] = order_id_mentioned
     state["warranty_eligible"] = warranty_eligible
+    state["explicit_escalation_request"] = explicit_escalation_request
     state["sentiment_history"] = state.get("sentiment_history", []) + [sentiment]
     state["turn_count"] = state.get("turn_count", 0) + 1
     state["is_handoff_turn"] = False
@@ -367,8 +373,8 @@ USER'S LATEST MESSAGE:
 
 NO_CONTEXT_EMPATHETIC_RESPONSE = (
     "I hear you, and I'm sorry you're running into this. I don't have specific "
-    "troubleshooting steps for that exact issue right now, so I'd like to get "
-    "this over to our support team so they can take a closer look for you."
+    "troubleshooting steps for that exact issue right now. Would you like me to "
+    "send this over to our support team so they can take a closer look?"
 )
 
 
@@ -393,7 +399,8 @@ def empathetic_response_node(state: dict) -> dict:
     if not namespace:
         state["response"] = NO_CONTEXT_EMPATHETIC_RESPONSE
         state["retrieval_score"] = None
-        print(f"[empathetic_response_node] No namespace, using generic empathetic fallback")
+        state["offered_manual_escalation"] = True
+        print(f"[empathetic_response_node] No namespace, using generic empathetic fallback, offering escalation")
         return state
 
     context, top_score = _retrieve_context(user_message, namespace)
@@ -401,7 +408,8 @@ def empathetic_response_node(state: dict) -> dict:
     if context is None:
         state["response"] = NO_CONTEXT_EMPATHETIC_RESPONSE
         state["retrieval_score"] = top_score
-        print(f"[empathetic_response_node] Top score below threshold, using generic empathetic fallback")
+        state["offered_manual_escalation"] = True
+        print(f"[empathetic_response_node] Top score below threshold, using generic empathetic fallback, offering escalation")
         return state
 
     prompt = EMPATHETIC_ANSWER_PROMPT.format(
@@ -502,6 +510,25 @@ def escalate_handoff_node(state: dict) -> dict:
     )
 
     print(f"[escalate_handoff_node] Prepared ticket {ticket_id}, awaiting email consent")
+    return state
+
+
+@traceable(name="manual_escalation_followup_node")
+def manual_escalation_followup_node(state: dict) -> dict:
+    """
+    Handles the yes/no reply after NO_CONTEXT_EMPATHETIC_RESPONSE asked
+    whether to escalate. A real "yes" triggers real escalation (via
+    escalate_handoff_node); anything else clears the offer and continues
+    normally rather than leaving a stale flag lying around.
+    """
+    state["offered_manual_escalation"] = False
+    user_message = state["messages"][-1]["content"]
+    wants_escalation = _interpret_yes_no(user_message)
+
+    if wants_escalation is True:
+        return escalate_handoff_node(state)
+
+    state["response"] = "No problem — let me know if there's anything else I can help with."
     return state
 
 

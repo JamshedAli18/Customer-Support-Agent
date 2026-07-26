@@ -41,6 +41,7 @@ from nodes import (
     order_booking_node,
     order_tracking_node,
     order_cancel_node,
+    manual_escalation_followup_node,
 )
 
 
@@ -73,9 +74,12 @@ class VoiceCartState(TypedDict, total=False):
 
 def route_after_classify(state: dict) -> Literal[
     "inquiry", "empathetic", "check_stock", "warranty_claim",
-    "order_booking", "order_tracking", "order_cancel", "other"
+    "order_booking", "order_tracking", "order_cancel", "escalate", "other"
 ]:
     """Routes based on classify_node's intent output."""
+    if state.get("explicit_escalation_request") and not state.get("escalated"):
+        return "escalate"
+
     intent = state.get("intent", "other")
     if intent == "inquiry":
         return "inquiry"
@@ -102,7 +106,7 @@ def route_after_empathetic(state: dict) -> Literal["escalate", "end"]:
 
 
 def route_at_start(state: dict) -> Literal[
-    "post_escalation", "escalation_followup", "warranty_email", "warranty_claim", "order_booking", "classify"
+    "post_escalation", "escalation_followup", "warranty_email", "warranty_claim", "order_booking", "manual_escalation_followup", "classify"
 ]:
     """
     Checks session status before running classification, in priority order:
@@ -133,6 +137,9 @@ def route_at_start(state: dict) -> Literal[
     if order_booking.get("status") in ("collecting", "confirming"):
         return "order_booking"
 
+    if state.get("offered_manual_escalation"):
+        return "manual_escalation_followup"
+
     return "classify"
 
 
@@ -152,6 +159,7 @@ def build_graph():
     builder.add_node("order_booking", order_booking_node)
     builder.add_node("order_tracking", order_tracking_node)
     builder.add_node("order_cancel", order_cancel_node)
+    builder.add_node("manual_escalation_followup", manual_escalation_followup_node)
 
     builder.add_conditional_edges(
         START,
@@ -162,6 +170,7 @@ def build_graph():
             "warranty_email": "warranty_email",
             "warranty_claim": "warranty_claim",
             "order_booking": "order_booking",
+            "manual_escalation_followup": "manual_escalation_followup",
             "classify": "classify",
         },
     )
@@ -177,6 +186,7 @@ def build_graph():
             "order_booking": "order_booking",
             "order_tracking": "order_tracking",
             "order_cancel": "order_cancel",
+            "escalate": "escalate",
             "other": "other",
         },
     )
@@ -202,6 +212,7 @@ def build_graph():
     builder.add_edge("order_booking", END)
     builder.add_edge("order_tracking", END)
     builder.add_edge("order_cancel", END)
+    builder.add_edge("manual_escalation_followup", END)
 
     return builder.compile()
 

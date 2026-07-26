@@ -43,6 +43,7 @@ from nodes import (
     order_booking_node,
     order_tracking_node,
     order_cancel_node,
+    manual_escalation_followup_node,
 )
 
 app = FastAPI(title="VoiceCart Support Agent API")
@@ -211,6 +212,9 @@ def _check_pending_short_circuit(state: dict) -> Optional[str]:
     if order_booking.get("status") in ("collecting", "confirming"):
         return "order_booking"
 
+    if state.get("offered_manual_escalation"):
+        return "manual_escalation_followup"
+
     return None
 
 
@@ -253,12 +257,13 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
             yield f"event: done\ndata: {json.dumps({'escalated': state.get('escalated', False), 'is_handoff_turn': False, 'ticket_id': state.get('ticket_id'), 'audio_base64': audio_base64})}\n\n"
             return
 
-        if pending_route in ("escalation_followup", "warranty_email", "warranty_claim", "order_booking"):
+        if pending_route in ("escalation_followup", "warranty_email", "warranty_claim", "order_booking", "manual_escalation_followup"):
             node_fn = {
                 "escalation_followup": escalation_followup_node,
                 "warranty_email": warranty_email_node,
                 "warranty_claim": warranty_claim_node,
                 "order_booking": order_booking_node,
+                "manual_escalation_followup": manual_escalation_followup_node,
             }[pending_route]
 
             updated_state = node_fn(state)
@@ -293,9 +298,20 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
             and state_after_classify.get("warranty_eligible")
         )
 
+        explicit_escalation = (
+            state_after_classify.get("explicit_escalation_request")
+            and not state_after_classify.get("escalated")
+        )
+
         full_response = ""
 
-        if should_escalate:
+        if explicit_escalation:
+            escalated_state = escalate_handoff_node(state_after_classify)
+            full_response = escalated_state["response"]
+            yield f"event: token\ndata: {json.dumps({'text': full_response})}\n\n"
+            state_after_classify.update(escalated_state)
+
+        elif should_escalate:
             escalated_state = empathetic_response_node(state_after_classify)
             escalated_state = escalate_handoff_node(escalated_state)
             full_response = escalated_state["response"]
