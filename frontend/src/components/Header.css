@@ -68,7 +68,7 @@
 
 /* --- Sentiment Badge --- */
 .header__sentiment {
-  display: inline-flex;
+  display: none;
   align-items: center;
   gap: 8px;
   padding: 6px 14px 6px 10px;

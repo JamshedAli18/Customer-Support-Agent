@@ -25,8 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "app"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "app", "graph"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app", "graph"))
 from db import sessions_collection
 from voice_pipeline import run_voice_turn, synthesize_speech
 from graph import graph

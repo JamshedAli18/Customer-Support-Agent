@@ -29,7 +29,13 @@ def transcribe_audio(audio_file_path: str) -> str:
         transcription = groq_client.audio.transcriptions.create(
             file=(os.path.basename(audio_file_path), file.read()),
             model="whisper-large-v3",
-            prompt="The following is a customer support inquiry from a user. Please transcribe it accurately. Ignore any background noise or silence.",
+            prompt=(
+                "The following is a customer support call about ShopNest Pulse wireless earbuds. "
+                "The customer may mention colors like Matte Black, Pearl White, Slate Blue, Red, Green, "
+                "Purple, Silver, Gold, Navy, or Pink, order IDs like ORD-20260726-052519, cities like "
+                "Lahore, Karachi, or Islamabad, and topics like Bluetooth pairing, ANC, warranty, or shipping. "
+                "Please transcribe accurately. Ignore background noise or silence."
+            ),
             response_format="text",
             language="en",
             temperature=0.0,

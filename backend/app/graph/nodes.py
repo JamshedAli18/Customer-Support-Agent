@@ -88,9 +88,37 @@ def _interpret_yes_no(message: str) -> Optional[bool]:
     return None
 
 
+def _normalize_spoken_email(message: str) -> str:
+    """
+    Converts common spoken-email patterns (from voice transcription) into
+    real email syntax before regex extraction. E.g. "jamshed at gmail dot
+    com" -> "jamshed@gmail.com". Safe to run on typed text too, since it
+    only fires on the specific "word at word dot word" pattern.
+    """
+    text = message
+
+    # "word at word dot word (dot word...)" -> word@word.word(.word...)
+    pattern = re.compile(
+        r'\b([a-zA-Z0-9._%+-]+)\s+at\s+([a-zA-Z0-9-]+)\s+dot\s+([a-zA-Z]{2,})\b',
+        re.IGNORECASE,
+    )
+    text = pattern.sub(lambda m: f"{m.group(1)}@{m.group(2)}.{m.group(3)}", text)
+
+    # Standalone " at " / " dot " inside something that already looks
+    # like it's forming an email attempt (has an @ or a recognizable
+    # domain word nearby) — normalize remaining loose "dot"/"at" words.
+    text = re.sub(r'\s+at\s+', '@', text) if '@' not in text and re.search(r'\bat\b.*\bdot\b', text, re.IGNORECASE) else text
+    text = re.sub(r'\s+dot\s+', '.', text, flags=re.IGNORECASE)
+
+    return text
+
+
 def _extract_email(message: str) -> Optional[str]:
-    """Extracts an email address via regex — deterministic, no LLM guessing."""
-    match = EMAIL_REGEX.search(message)
+    """Extracts an email address via regex — deterministic, no LLM guessing.
+    Normalizes spoken patterns (e.g. 'at'/'dot') first, since voice
+    transcription doesn't produce literal @ and . symbols."""
+    normalized = _normalize_spoken_email(message)
+    match = EMAIL_REGEX.search(normalized)
     return match.group(0) if match else None
 
 
@@ -1461,9 +1489,10 @@ def warranty_claim_node(state: dict) -> dict:
 @traceable(name="warranty_email_node")
 def warranty_email_node(state: dict) -> dict:
     """
-    Collects the customer's email for a filed warranty claim. Email is
-    mandatory — if the user tries to decline or doesn't provide one,
-    we insist and ask again rather than finalizing without it.
+    Collects the customer's email for a filed warranty claim. If the user
+    explicitly declines (or asks to leave/stop), gracefully exits without
+    forcing an email — the claim stays filed, just without a way to
+    follow up directly, same graceful-exit pattern as escalation email.
     """
     warranty_email = state.get("warranty_email") or {}
     claim_id = warranty_email.get("claim_id")
@@ -1497,12 +1526,20 @@ def warranty_email_node(state: dict) -> dict:
 
     declined = _interpret_yes_no(user_message)
     if declined is False:
-        state["response"] = (
-            f"I understand, but an email address is required so our team can follow up on claim "
-            f"{claim_id} — could you share it?"
+        warranty_email["status"] = "declined"
+        state["warranty_email"] = warranty_email
+        claim_doc = warranty_claims_collection.find_one({"claim_id": claim_id}) or {}
+        notify_warranty_claim(
+            claim_id, claim_doc.get("earbud_affected", "unspecified"),
+            claim_doc.get("issue_description", ""), None,
         )
-    else:
-        state["response"] = "I couldn't catch a valid email address — could you type it again?"
+        state["response"] = (
+            f"No problem — your warranty claim (reference {claim_id}) is filed without an email on file. "
+            f"Our team will review it, though they won't be able to follow up directly without a contact email."
+        )
+        return state
+
+    state["response"] = "I couldn't catch a valid email address — could you type it again, or let me know if you'd rather skip it?"
     return state
 
 
