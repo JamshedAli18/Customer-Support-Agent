@@ -2,11 +2,13 @@ import { useState, useRef } from "react";
 import Header from "./components/Header";
 import ChatArea from "./components/ChatArea";
 import InputBar from "./components/InputBar";
+import LandingPage from "./components/LandingPage";
 import "./App.css";
 
 const API_BASE = "http://localhost:8000";
 
 export default function App() {
+  const [showChat, setShowChat] = useState(false);
   const [messages, setMessages] = useState([]);
   const [sessionId, setSessionId] = useState(null);
   const [sentiment, setSentiment] = useState("neutral");
@@ -230,8 +232,17 @@ export default function App() {
     setVoiceStage("idle");
   }
 
+  if (!showChat) {
+    return <LandingPage onStartChatting={() => setShowChat(true)} />;
+  }
+
   return (
-    <div className="app" id="app-root">
+    <div className="app app--chat-enter" id="app-root">
+      <div className="app__aurora" aria-hidden="true">
+        <span className="app__aurora-blob app__aurora-blob--one" />
+        <span className="app__aurora-blob app__aurora-blob--two" />
+        <span className="app__aurora-blob app__aurora-blob--three" />
+      </div>
       <Header sentiment={sentiment} />
       <ChatArea messages={messages} onReplayAudio={replayAudio} />
       <InputBar
