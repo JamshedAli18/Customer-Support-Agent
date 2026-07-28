@@ -901,14 +901,22 @@ def order_booking_node(state: dict) -> dict:
     address in this session (not just the last successfully booked one).
     """
     existing_order_state = state.get("order_booking") or {}
-    terminal_statuses = {"booked", "abandoned", "out_of_stock"}
+    full_reset_statuses = {"booked", "abandoned"}
 
-    if existing_order_state.get("status") in terminal_statuses:
+    if existing_order_state.get("status") in full_reset_statuses:
         order_state = {
             "status": "not_started", "color": None, "quantity": None,
             "shipping_address": None, "email": None,
         }
         print("[order_booking_node] Previous order was terminal, starting a fresh order")
+    elif existing_order_state.get("status") == "out_of_stock":
+        # Only the color was invalid (insufficient stock) — keep
+        # everything else the user already gave (address, email) and
+        # just ask them to pick a different color or quantity.
+        order_state = dict(existing_order_state)
+        order_state["status"] = "collecting"
+        order_state["color"] = None
+        print("[order_booking_node] Previous attempt was out of stock, keeping address/email, re-collecting color")
     else:
         order_state = existing_order_state or {
             "status": "not_started", "color": None, "quantity": None,
@@ -999,6 +1007,14 @@ def order_booking_node(state: dict) -> dict:
     )
     extracted = json.loads(extraction_response.choices[0].message.content)
 
+    # Normalize color casing against the real inventory list — the
+    # extraction LLM has no controlled vocabulary, so "silver" typed by
+    # the user must be matched case-insensitively to the real "Silver".
+    if extracted.get("color"):
+        valid_colors = _get_valid_colors()
+        matched = next((c for c in valid_colors if c.lower() == extracted["color"].strip().lower()), None)
+        extracted["color"] = matched
+
     # Track the MOST RECENT real address/email mentioned in this session,
     # updated every time one is given — regardless of whether that order succeeds.
     if extracted.get("shipping_address"):
@@ -1038,7 +1054,16 @@ def order_booking_node(state: dict) -> dict:
             print(f"[order_booking_node] Started order collection, missing: {missing}")
             return state
 
-        order_state["attempts"] = order_state.get("attempts", 0) + 1
+        # Only count this as a stalled attempt if the user's message
+        # didn't actually provide any new field this turn — real
+        # progress (even partial) should never count against the limit.
+        made_progress = any(extracted.get(f) for f in REQUIRED_ORDER_FIELDS)
+
+        if made_progress:
+            order_state["attempts"] = 0
+        else:
+            order_state["attempts"] = order_state.get("attempts", 0) + 1
+
         state["order_booking"] = order_state
 
         if order_state["attempts"] >= 3:
