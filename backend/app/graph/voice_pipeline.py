@@ -4,6 +4,7 @@ input/output. STT (Groq Whisper) -> graph.invoke() -> TTS (Cartesia).
 """
 
 import os
+import re
 from dotenv import load_dotenv
 from groq import Groq
 from cartesia import Cartesia
@@ -11,6 +12,7 @@ from cartesia import Cartesia
 import sys
 sys.path.append(os.path.dirname(__file__))
 from graph import graph
+from nodes import _normalize_spoken_email
 
 load_dotenv()
 
@@ -31,7 +33,8 @@ def transcribe_audio(audio_file_path: str) -> str:
             model="whisper-large-v3",
             prompt=(
                 "The following is a customer support call about ShopNest Pulse wireless earbuds. "
-                "The customer may mention colors like Matte Black, Pearl White, Slate Blue, Red, Green, "
+                "The customer may mention email addresses like jamshed@example.com, user@gmail.com, "
+                "colors like Matte Black, Pearl White, Slate Blue, Red, Green, "
                 "Purple, Silver, Gold, Navy, or Pink, order IDs like ORD-20260726-052519, cities like "
                 "Lahore, Karachi, or Islamabad, and topics like Bluetooth pairing, ANC, warranty, or shipping. "
                 "Please transcribe accurately. Ignore background noise or silence."
@@ -40,7 +43,22 @@ def transcribe_audio(audio_file_path: str) -> str:
             language="en",
             temperature=0.0,
         )
-    return transcription.strip()
+    text = transcription.strip()
+    
+    # Normalize spoken symbols to their character equivalents
+    replacements = {
+        r"\bat the rate of\b": "@",
+        r"\bat the rate\b": "@",
+        r"\bat the red\b": "@",
+        r"\bhash\b": "#",
+        r"\bunderscore\b": "_",
+        r"\bhyphen\b": "-",
+        r"\bdash\b": "-"
+    }
+    for pattern, symbol in replacements.items():
+        text = re.sub(pattern, symbol, text, flags=re.IGNORECASE)
+        
+    return text
 
 
 import requests
@@ -107,6 +125,7 @@ def run_voice_turn(audio_file_path: str, state: dict, output_audio_path: str = "
     Mutates and returns the conversation state, plus adds 'audio_output_path'.
     """
     transcript = transcribe_audio(audio_file_path)
+    transcript = _normalize_spoken_email(transcript)
     print(f"[voice_pipeline] Transcribed: {transcript}")
 
     state["messages"].append({"role": "user", "content": transcript})

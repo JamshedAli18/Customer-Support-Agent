@@ -44,6 +44,7 @@ from nodes import (
     order_tracking_node,
     order_cancel_node,
     manual_escalation_followup_node,
+    _normalize_spoken_email,
 )
 
 app = FastAPI(title="VoiceCart Support Agent API")
@@ -143,6 +144,7 @@ async def voice_endpoint(
                 os.remove(input_path)
 
     else:
+        text = _normalize_spoken_email(text)
         state["messages"].append({"role": "user", "content": text})
 
         try:
@@ -235,6 +237,7 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
     state = SESSIONS[session_id]
     pending_route = _check_pending_short_circuit(state)
 
+    text = _normalize_spoken_email(text)
     state["messages"].append({"role": "user", "content": text})
 
     def event_generator():
@@ -287,33 +290,17 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
 
         yield f"event: meta\ndata: {json.dumps({'session_id': session_id, 'intent': intent, 'sentiment': state_after_classify.get('sentiment')})}\n\n"
 
-        same_issue_streak = state_after_classify.get("same_issue_streak", 0)
-        should_escalate = (
-            intent == "complaint"
-            and same_issue_streak >= 3
-        )
-
         should_start_warranty_claim = (
             intent == "complaint"
             and state_after_classify.get("warranty_eligible")
         )
 
-        explicit_escalation = (
-            state_after_classify.get("explicit_escalation_request")
-            and not state_after_classify.get("escalated")
-        )
+        explicit_escalation = state_after_classify.get("explicit_escalation_request")
 
         full_response = ""
 
         if explicit_escalation:
             escalated_state = escalate_handoff_node(state_after_classify)
-            full_response = escalated_state["response"]
-            yield f"event: token\ndata: {json.dumps({'text': full_response})}\n\n"
-            state_after_classify.update(escalated_state)
-
-        elif should_escalate:
-            escalated_state = empathetic_response_node(state_after_classify)
-            escalated_state = escalate_handoff_node(escalated_state)
             full_response = escalated_state["response"]
             yield f"event: token\ndata: {json.dumps({'text': full_response})}\n\n"
             state_after_classify.update(escalated_state)
@@ -361,6 +348,12 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
             cancel_state = order_cancel_node(state_after_classify)
             full_response = cancel_state["response"]
             state_after_classify.update(cancel_state)
+            yield f"event: token\ndata: {json.dumps({'text': full_response})}\n\n"
+
+        elif intent == "complaint":
+            empathetic_state = empathetic_response_node(state_after_classify)
+            full_response = empathetic_state["response"]
+            state_after_classify.update(empathetic_state)
             yield f"event: token\ndata: {json.dumps({'text': full_response})}\n\n"
 
         else:

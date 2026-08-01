@@ -77,7 +77,7 @@ def route_after_classify(state: dict) -> Literal[
     "order_booking", "order_tracking", "order_cancel", "escalate", "other"
 ]:
     """Routes based on classify_node's intent output."""
-    if state.get("explicit_escalation_request") and not state.get("escalated"):
+    if state.get("explicit_escalation_request"):
         return "escalate"
 
     intent = state.get("intent", "other")
