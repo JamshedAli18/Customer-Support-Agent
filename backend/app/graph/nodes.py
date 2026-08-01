@@ -1016,13 +1016,17 @@ def order_booking_node(state: dict) -> dict:
 
             notify_new_order(order["order_id"], order["color"], order["quantity"], order["total_price"], order["customer_email"])
 
-            confirmation_html = _build_order_confirmation_email_html(order)
-            email_sent = send_customer_email(
-                to_email=order["customer_email"],
-                subject=f"Order Confirmed — {order['order_id']}",
-                html_body=confirmation_html,
-            )
-            print(f"[order_booking_node] Confirmation email sent: {email_sent}")
+            allowed_recipients = {e.strip().lower() for e in os.getenv("ALLOWED_EMAIL_RECIPIENTS", "").split(",") if e.strip()}
+            if order["customer_email"].strip().lower() in allowed_recipients:
+                confirmation_html = _build_order_confirmation_email_html(order)
+                email_sent = send_customer_email(
+                    to_email=order["customer_email"],
+                    subject=f"Order Confirmed — {order['order_id']}",
+                    html_body=confirmation_html,
+                )
+                print(f"[order_booking_node] Confirmation email sent: {email_sent}")
+            else:
+                print(f"[order_booking_node] Skipped confirmation email — {order['customer_email']} not on allowlist")
 
             state["response"] = (
                 f"Your order is booked — reference {order['order_id']}, {order['quantity']}x {order['color']} "
