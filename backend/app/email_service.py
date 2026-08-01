@@ -37,7 +37,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
-GMAIL_TOKEN_PATH = os.path.join(os.path.dirname(__file__), "token.json")
+GMAIL_TOKEN_PATH = "/etc/secrets/token.json" if os.path.exists("/etc/secrets/token.json") else os.path.join(os.path.dirname(__file__), "token.json")
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
