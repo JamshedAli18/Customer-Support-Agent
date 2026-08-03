@@ -150,7 +150,8 @@ async def voice_endpoint(
         try:
             state = graph.invoke(state)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Graph error: {str(e)}")
+            print(f"[voice_endpoint] Graph error: {e}")
+            state["response"] = "I'm having trouble processing that right now. Please try again in a moment."
 
         response_text = state.get("response", "I'm sorry, I didn't catch that.")
 
@@ -285,7 +286,14 @@ async def text_stream_endpoint(text: str = Form(...), session_id: Optional[str] 
             return
 
         # --- Normal flow: classify first ---
-        state_after_classify = classify_and_retrieve(state)
+        try:
+            state_after_classify = classify_and_retrieve(state)
+        except Exception as e:
+            print(f"[text_stream_endpoint] classify_and_retrieve error: {e}")
+            state_after_classify = dict(state)
+            state_after_classify["intent"] = "other"
+            state_after_classify["context"] = None
+
         intent = state_after_classify.get("intent")
 
         yield f"event: meta\ndata: {json.dumps({'session_id': session_id, 'intent': intent, 'sentiment': state_after_classify.get('sentiment')})}\n\n"

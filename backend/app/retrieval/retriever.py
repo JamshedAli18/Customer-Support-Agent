@@ -85,7 +85,7 @@ class VoiceCartRetriever:
             ).embeddings[0]
         except Exception as e:
             print(f"[retriever] Cohere embedding error: {e}")
-            raise
+            return []
 
         sparse_vec = self.bm25.encode_queries(query)
 
@@ -101,7 +101,7 @@ class VoiceCartRetriever:
             )
         except Exception as e:
             print(f"[retriever] Pinecone query error for namespace '{namespace}': {e}")
-            raise
+            return []
 
         return [
             {

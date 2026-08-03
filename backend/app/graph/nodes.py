@@ -29,6 +29,25 @@ if not GROQ_API_KEY:
 client = Groq(api_key=GROQ_API_KEY)
 retriever = VoiceCartRetriever(alpha=0.75)
 
+FRIENDLY_ERROR_MESSAGE = (
+    "I'm having trouble processing that right now — this might be a temporary issue on our end. "
+    "Please try again in a moment, or reach out to our support team if this keeps happening."
+)
+
+
+def _safe_groq_call(**kwargs):
+    """
+    Wraps client.chat.completions.create with error handling for rate
+    limits, quota exhaustion, timeouts, or API outages. Returns the raw
+    response on success, or None on failure — callers must check for
+    None and fall back to FRIENDLY_ERROR_MESSAGE rather than crashing.
+    """
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as e:
+        print(f"[_safe_groq_call] Groq API call failed: {e}")
+        return None
+
 SCORE_THRESHOLD = 0.25
 EMPATHETIC_SCORE_THRESHOLD = 0.35
 PRODUCT_NAME = "ShopNest Pulse"
@@ -219,7 +238,7 @@ def classify_node(state: dict) -> dict:
         previous_issue_topic=previous_issue_topic,
     )
 
-    response = client.chat.completions.create(
+    response = _safe_groq_call(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"CONVERSATION HISTORY:\n{history_text}\n\nClassify the LATEST user message above."},
@@ -228,6 +247,19 @@ def classify_node(state: dict) -> dict:
         temperature=0,
         response_format={"type": "json_object"},
     )
+
+    if response is None:
+        # Classification itself failed — we can't route intelligently,
+        # so fall back to a safe "other" turn with the friendly message
+        # rather than crashing the whole request.
+        state["intent"] = "other"
+        state["sentiment"] = "neutral"
+        state["target_namespace"] = None
+        state["response"] = FRIENDLY_ERROR_MESSAGE
+        state["turn_count"] = state.get("turn_count", 0) + 1
+        state["is_handoff_turn"] = False
+        print("[classify_node] Groq call failed, returning safe fallback")
+        return state
 
     parsed = json.loads(response.choices[0].message.content)
 
@@ -371,11 +403,17 @@ def inquiry_node(state: dict) -> dict:
 
     prompt = GROUNDED_ANSWER_PROMPT.format(context=context, question=user_question, history=history_text)
 
-    response = client.chat.completions.create(
+    response = _safe_groq_call(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
         temperature=0.3,
     )
+
+    if response is None:
+        state["response"] = FRIENDLY_ERROR_MESSAGE
+        state["retrieval_score"] = top_score
+        print("[inquiry_node] Groq call failed, returning friendly fallback")
+        return state
 
     answer = response.choices[0].message.content
 
@@ -470,11 +508,17 @@ def empathetic_response_node(state: dict) -> dict:
         context=context, question=user_message, sentiment=sentiment, history=history_text
     )
 
-    response = client.chat.completions.create(
+    response = _safe_groq_call(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.1-8b-instant",
         temperature=0.3,
     )
+
+    if response is None:
+        state["response"] = FRIENDLY_ERROR_MESSAGE
+        state["retrieval_score"] = top_score
+        print("[empathetic_response_node] Groq call failed, returning friendly fallback")
+        return state
 
     answer = response.choices[0].message.content
 
@@ -746,11 +790,16 @@ def other_node(state: dict) -> dict:
 
     prompt = OTHER_NODE_SYSTEM_PROMPT.format(name_context=name_context, escalation_status=escalation_status, history=history_text, message=user_message)
 
-    response = client.chat.completions.create(
+    response = _safe_groq_call(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
         temperature=0.4,
     )
+
+    if response is None:
+        state["response"] = FRIENDLY_ERROR_MESSAGE
+        print("[other_node] Groq call failed, returning friendly fallback")
+        return state
 
     state["response"] = response.choices[0].message.content
     print(f"[other_node] response={state['response']}")
