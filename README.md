@@ -1,4 +1,4 @@
-# 🎧 VoiceCart — Sentiment-Aware Voice Support Agent
+#  VoiceCart — Sentiment-Aware Voice Support Agent
 
 VoiceCart is a full-stack, agentic customer support system built for **ShopNest Pulse** — a fictional wireless earbuds brand. It handles product inquiries, orders, warranty claims, and emotionally-aware escalation, entirely through natural conversation — by text or by voice.
 
