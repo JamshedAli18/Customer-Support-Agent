@@ -1,183 +1,283 @@
-# 🎧 VoiceCart — Sentiment-Aware Voice Support Agent
+# VoiceCart
 
-VoiceCart is a full-stack, agentic customer support system built for **ShopNest Pulse** — a fictional wireless earbuds brand. It handles product inquiries, orders, warranty claims, and emotionally-aware escalation, entirely through natural conversation — by text or by voice.
+VoiceCart is a full-stack customer support agent for ShopNest Pulse, a fictional wireless earbuds brand. It handles product questions, stock checks, orders, warranty claims, troubleshooting, and escalation through either chat or voice.
 
-Built with **LangGraph**, grounded in a **hybrid-search RAG pipeline**, and wired into real backend infrastructure (MongoDB, Slack, email), this project is an end-to-end demonstration of production-style agentic design: multi-turn state machines, sentiment-driven escalation, deterministic tool-calling, and anti-hallucination guardrails.
+The system combines LangGraph, hybrid-search RAG, MongoDB, Slack, email, and a React frontend into one production-style demo of an agentic support workflow with stateful routing, grounded answers, and deterministic tool use.
 
----
+## Contents
 
-## 📐 Architecture Overview
+- [Overview](#overview)
+- [Diagrams](#diagrams)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Repository Layout](#repository-layout)
+- [Local Setup](#local-setup)
+- [API Endpoints](#api-endpoints)
+- [Notes](#notes)
+- [License](#license)
 
-```
-User (voice or text)
-      │
-      ▼
-┌─────────────────┐      ┌──────────────────────┐
-│  STT (Whisper)   │      │   React Frontend      │
-└─────────────────┘      └──────────────────────┘
-      │                             │
-      ▼                             ▼
-┌───────────────────────────────────────────────┐
-│              FastAPI Backend                    │
-│   /api/voice   /api/text/stream   /api/session  │
-└───────────────────────────────────────────────┘
-      │
-      ▼
-┌───────────────────────────────────────────────┐
-│           LangGraph State Machine               │
-│  classify → route → [node] → response           │
-└───────────────────────────────────────────────┘
-      │
-      ├── Pinecone (hybrid RAG) ── Cohere embeddings
-      ├── MongoDB Atlas (orders, tickets, claims, inventory)
-      ├── Resend (email notifications)
-      ├── Slack (3 channel webhooks)
-      └── Cartesia / Deepgram (TTS)
-```
+## Overview
 
----
+VoiceCart is built around a FastAPI backend and a React frontend. User input arrives through the browser as text or voice, is classified by the LangGraph agent, and is then routed into the right support flow. The backend can retrieve product knowledge from Pinecone, read and write operational data in MongoDB, send notifications to Slack, and send support or customer emails.
 
-## 🛠️ Tech Stack
+## Diagrams
+
+### High-Level Architecture
+
+<p align="center">
+      <img src="pipelines/high_level_architecture.png" alt="High-level architecture diagram" width="900" />
+</p>
+
+This is the main end-to-end view of the product: frontend, backend, LangGraph, RAG, storage, notifications, and voice services.
+
+### LangGraph Routing
+
+<p align="center">
+      <img src="pipelines/langgraph_full_connections.png" alt="LangGraph routing diagram" width="900" />
+</p>
+
+This shows how the agent moves between inquiry, stock, booking, tracking, cancel, warranty, complaint handling, escalation, and post-escalation follow-up.
+
+### RAG Pipeline
+
+<p align="center">
+      <img src="pipelines/rag_pipeline.png" alt="RAG pipeline diagram" width="900" />
+</p>
+
+This is the retrieval path used for grounded answers: namespace selection, hybrid dense plus BM25 search, score thresholding, and the honest fallback when the answer is not in the KB.
+
+### Voice Pipeline
+
+<p align="center">
+      <img src="pipelines/voice_pipeline.png" alt="Voice pipeline diagram" width="900" />
+</p>
+
+This shows the audio path: browser microphone, Groq Whisper transcription, the same LangGraph backend as text, Cartesia TTS, Deepgram fallback, and audio playback in the browser.
+
+### Integrations Overview
+
+<p align="center">
+      <img src="pipelines/integrations_overview.png" alt="Integrations overview diagram" width="900" />
+</p>
+
+This diagram highlights how the backend agent talks to MongoDB, Gmail API, Resend, and Slack.
+
+## Features
+
+### Conversational Support
+
+- Text chat and voice support in one flow.
+- Streaming text responses over SSE for supported intents.
+- Session state that persists in MongoDB through the `sessions` collection.
+- One-turn and multi-turn interactions for orders, warranty claims, and escalation.
+
+### Grounded Knowledge Base
+
+- Hybrid retrieval with dense embeddings plus BM25 sparse search in Pinecone.
+- Retrieval is limited to five namespaces: product-info, usage-guidance, troubleshooting, policies, and limitations.
+- The assistant falls back to an honest "I do not know" style response when the KB does not support the answer.
+
+### Order Handling
+
+- Stock lookup before booking.
+- Adaptive order collection across multiple turns.
+- Inventory updates on booking and restoration on cancellation.
+- Cash on Delivery messaging.
+- Slack notifications for new orders and cancellations.
+- Customer confirmation email support through Gmail API for allowlisted recipients.
+
+### Warranty and Escalation
+
+- Warranty claims only start when the user explicitly asks for a claim.
+- Warranty flow collects the required fields and validates the ownership window.
+- Escalation is triggered by repeated unresolved issues or explicit handoff requests.
+- Support ticket summaries are generated for the team and sent to email plus Slack.
+- After escalation, the next turn returns a one-time acknowledgment before normal chat resumes.
+
+### Voice Experience
+
+- Groq Whisper for transcription.
+- Cartesia as the primary TTS provider.
+- Deepgram as a timeout-bounded fallback when Cartesia fails.
+- Graceful degradation when a provider is rate limited or unavailable.
+
+## Tech Stack
 
 | Layer | Technology |
-|---|---|
-| 🧠 LLM | Groq — Llama 3.3 70B & Llama 3.1 8B Instant |
-| 🎙️ Speech-to-Text | Groq Whisper (`whisper-large-v3`) |
-| 🔊 Text-to-Speech | Cartesia (`sonic-turbo`) with Deepgram Aura-2 fallback |
-| 🔍 Embeddings | Cohere `embed-english-v3.0` (1024-dim) |
-| 📚 Vector Database | Pinecone (hybrid dense + BM25 search, dotproduct metric) |
-| 🕸️ Orchestration | LangGraph |
-| 📊 Observability | LangSmith |
-| ⚙️ Backend | FastAPI |
-| 🗄️ Database | MongoDB Atlas |
-| 📧 Email | Resend |
-| 💬 Notifications | Slack Webhooks |
-| 🎨 Frontend | React (Vite) |
+| --- | --- |
+| Frontend | React + Vite |
+| Backend | FastAPI |
+| Agent orchestration | LangGraph |
+| LLMs | Groq Llama models |
+| STT | Groq Whisper |
+| TTS | Cartesia with Deepgram fallback |
+| Embeddings | Cohere `embed-english-v3.0` |
+| Retrieval | Pinecone hybrid search |
+| Database | MongoDB Atlas |
+| Email | Resend for support mail, Gmail API for customer confirmations |
+| Notifications | Slack incoming webhooks |
+| Observability | LangSmith |
 
----
+## Repository Layout
 
-## ✅ What's Done
-
-### 📚 Knowledge Base & RAG
-- ✅ Hybrid search (dense + BM25) via Pinecone, tuned `alpha=0.75`
-- ✅ 5 namespaces, **79 chunks** across product-info, usage-guidance, troubleshooting, policies, and limitations
-- ✅ Retrieval score threshold tuned to **0.25** through iterative real-query testing
-- ✅ Anti-hallucination grounding — answers only from retrieved context, honest "I don't know" fallback otherwise
-
-### 🕸️ LangGraph Nodes
-| Node | Responsibility |
-|---|---|
-| `classify_node` | Intent, sentiment, namespace, and field extraction for every turn |
-| `inquiry_node` | RAG-grounded question answering, supports multi-topic questions |
-| `empathetic_response_node` | Sentiment-aware troubleshooting responses |
-| `escalate_handoff_node` / `escalation_followup_node` | 3-strike same-issue escalation → email consent → ticket creation |
-| `post_escalation_node` | One-time acknowledgment, then resumes normal conversation |
-| `other_node` | Greetings, small talk, name memory, out-of-scope handling |
-| `check_stock_node` | Live MongoDB-backed inventory checks |
-| `order_booking_node` | Adaptive multi-turn order collection, address memory, stock validation |
-| `order_tracking_node` | Deterministic order lookup by ID |
-| `order_cancel_node` | Cancellation with inventory restoration |
-| `warranty_claim_node` / `warranty_email_node` | Adaptive claim collection, 12-month validation, mandatory email |
-
-### 🛒 Order System
-- ✅ Single-message booking (all details at once) or adaptive follow-up
-- ✅ Real-time stock validation before booking
-- ✅ Inventory decrement on booking, restoration on cancellation
-- ✅ Multiple independent orders per session (correct state reset)
-- ✅ Shipping address memory — resolves "same address as before" with explicit confirmation
-- ✅ Order tracking with malformed-ID detection
-- ✅ Cash on Delivery (COD) payment messaging
-- ✅ Slack notification on every booking/cancellation
-
-### 🛡️ Warranty System
-- ✅ **Explicit-request-only** trigger — no inferred eligibility from symptom severity
-- ✅ Adaptive field collection that reads conversation history (not just the current message)
-- ✅ Deterministic 12-month ownership validation — parses duration, rejects out-of-window claims
-- ✅ Mandatory customer email collection before claim finalization
-- ✅ Terminal-state reset — supports multiple independent claims per session
-
-### 📈 Escalation System
-- ✅ **Same-issue-streak detection** — escalates only when one specific problem goes unresolved for 3 consecutive turns (not just 3 unrelated complaints in a row)
-- ✅ Email consent flow before creating a support ticket
-- ✅ LLM-generated ticket summaries for the support team
-- ✅ One-time post-escalation acknowledgment, then normal conversation resumes
-
-### 🔌 Integrations
-- ✅ MongoDB Atlas — `inventory`, `orders`, `tickets`, `warranty_claims` collections
-- ✅ Resend — transactional emails for tickets and warranty claims
-- ✅ Slack — 3 dedicated channels (`#orders`, `#support-tickets`, `#warranty-claims`)
-
-### 🎙️ Voice Pipeline
-- ✅ Groq Whisper transcription
-- ✅ Cartesia TTS (primary), client-level timeout to prevent hangs
-- ✅ Deepgram TTS (fallback via direct REST call), independently timeout-bounded
-- ✅ Graceful degradation on quota/rate-limit errors
-
-### 💻 Frontend
-- ✅ React chat interface with streaming responses (SSE)
-- ✅ Voice input and playback
-- ✅ Sentiment-aware UI styling for handoff/escalation turns
-
----
-
-## 🚧 What's Remaining
-
-- ⏳ **Order confirmation email to customer** — currently skipped; Resend's sandbox domain can only send to the account owner's own verified email, not arbitrary customer addresses. Needs either a verified custom domain or a Gmail API integration to unblock.
-- ⏳ **Deployment** — backend (Render), frontend (Vercel), and production environment configuration not yet done.
-- ⏳ **Session persistence** — sessions currently live in an in-memory dict in `main.py`; a `sessions` MongoDB collection is scaffolded but not yet wired in, so session state is lost on server restart.
-- ⏳ **Minor KB gaps** — a small number of very specific phrasings (e.g. unusual troubleshooting complaints not covered in the current 79 chunks) can still fall back to "I don't have that information" — expected and honest behavior, but content coverage can keep growing over time.
-
----
-
-## 📁 Project Structure
-
-```
+```text
 Customer-Support/
 ├── backend/
-│   ├── main.py                  # FastAPI app, voice + streaming text endpoints
-│   ├── recreate_index.py        # Pinecone index setup
+│   ├── main.py
+│   ├── recreate_index.py
 │   ├── requirements.txt
 │   ├── .env.example
-│   ├── app/
-│   │   ├── db.py                 # MongoDB collections
-│   │   ├── email_service.py      # Resend integration
-│   │   ├── slack_service.py      # Slack webhook integration
-│   │   ├── graph/
-│   │   │   ├── nodes.py          # All LangGraph node logic
-│   │   │   ├── graph.py          # StateGraph wiring + routing
-│   │   │   └── voice_pipeline.py # STT/TTS orchestration
-│   │   ├── ingest/
-│   │   │   ├── chunks.py         # PDF → chunk parser
-│   │   │   ├── upload.py         # Embeds + upserts to Pinecone
-│   │   │   ├── seed_inventory.py
-│   │   │   └── *.pdf             # Knowledge base source documents
-│   │   └── retrieval/
-│   │       └── retriever.py      # Hybrid search implementation
-└── frontend/
-    └── src/components/            # Chat UI (React)
+│   └── app/
+│       ├── db.py
+│       ├── email_service.py
+│       ├── slack_service.py
+│       ├── graph/
+│       │   ├── graph.py
+│       │   ├── nodes.py
+│       │   └── voice_pipeline.py
+│       ├── ingest/
+│       │   ├── chunks.py
+│       │   ├── upload.py
+│       │   └── seed_inventory.py
+│       └── retrieval/
+│           └── retriever.py
+├── frontend/
+│   ├── package.json
+│   └── src/
+│       ├── App.jsx
+│       └── components/
+└── pipelines/
+      ├── high_level_architecture.png
+      ├── integrations_overview.png
+      ├── langgraph_full_connections.png
+      ├── rag_pipeline.png
+      └── voice_pipeline.png
 ```
 
----
+## Local Setup
 
-## 🚀 Getting Started
+### 1. Prerequisites
 
-```bash
-# Backend
+- Python 3.11 or newer.
+- Node.js 20 or newer.
+- MongoDB Atlas database.
+- Pinecone index.
+- API keys for Groq, Cohere, Cartesia, Deepgram, Resend, Slack, and LangSmith.
+- Optional: Gmail API OAuth token if you want customer order confirmations to go to real inboxes.
+
+### 2. Clone the repo
+
+```powershell
+git clone https://github.com/JamshedAli18/Customer-Support-Agent.git
+cd Customer-Support-Agent
+```
+
+### 3. Configure the backend environment
+
+Copy `backend/.env.example` to `backend/.env` and fill in the values.
+
+Required variables used by the current code:
+
+```env
+GROQ_API_KEY=
+CARTESIA_API_KEY=
+DEEPGRAM_API_KEY=
+COHERE_API_KEY=
+PINECONE_API_KEY=
+PINECONE_INDEX_NAME=voicecart-kb
+MONGODB_URI=
+MONGODB_DB_NAME=voicecart
+RESEND_API_KEY=
+SUPPORT_EMAIL_TO=
+SLACK_WEBHOOK_ORDERS=
+SLACK_WEBHOOK_TICKETS=
+SLACK_WEBHOOK_WARRANTY=
+LANGSMITH_API_KEY=
+LANGSMITH_TRACING=true
+LANGSMITH_PROJECT=voicecart
+ALLOWED_EMAIL_RECIPIENTS=your_test_email@gmail.com,another_test_email@gmail.com
+```
+
+Notes:
+
+- The code persists sessions in MongoDB, so `MONGODB_URI` is required.
+- `ALLOWED_EMAIL_RECIPIENTS` controls which addresses can receive real customer confirmation emails.
+- Gmail API credentials are read from `backend/app/token.json` locally, or `/etc/secrets/token.json` in deployment.
+
+### 4. Set up the backend
+
+```powershell
 cd backend
-pip install -r requirements.txt --break-system-packages
-cp .env.example .env   # fill in your real API keys
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+If PowerShell blocks script activation, run this once in the same terminal session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process RemoteSigned
+```
+
+### 5. Prepare data and the Pinecone index
+
+Run these from the `backend` folder after the environment is configured:
+
+```powershell
+python app/ingest/seed_inventory.py
 python recreate_index.py
 python app/ingest/upload.py
-uvicorn main:app --reload --port 8000
+```
 
-# Frontend
+What each step does:
+
+- `seed_inventory.py` populates MongoDB inventory documents.
+- `recreate_index.py` creates the Pinecone index with the correct hybrid-search settings.
+- `upload.py` chunks the knowledge base, creates embeddings, fits BM25, and uploads the vectors to Pinecone.
+
+### 6. Run the backend API
+
+```powershell
+uvicorn main:app --reload --port 8000
+```
+
+Backend API is then available at `http://127.0.0.1:8000`.
+
+### 7. Set up the frontend
+
+Open a second terminal:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
----
+Vite will print the local frontend URL, usually `http://localhost:5173`.
+      ├── high_level_architecture.png
+      ├── integrations_overview.png
+      ├── langgraph_full_connections.png
+      ├── rag_pipeline.png
+      └── voice_pipeline.png
+3. Try a voice turn if your browser allows microphone access.
+4. Check that the backend health endpoint returns OK at `/api/health`.
 
-## 📝 License
+## API Endpoints
 
-This is a personal / portfolio project built for learning and demonstration purposes.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/api/health` | Health check |
+| POST | `/api/text/stream` | Streaming text chat over SSE |
+| POST | `/api/voice` | Voice or text turn that returns JSON plus base64 audio |
+| DELETE | `/api/session/{session_id}` | Reset a session |
+
+## Notes
+
+- The assistant is designed to stay grounded in retrieved knowledge and to say when it does not know something.
+- Order confirmations are sent only to allowlisted email addresses.
+- The voice pipeline falls back from Cartesia to Deepgram if the primary provider fails.
+- MongoDB stores operational data such as inventory, orders, tickets, warranty claims, and sessions.
+
+## License
+
+This project is for personal, portfolio, and learning use.
